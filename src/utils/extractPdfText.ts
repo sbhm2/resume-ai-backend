@@ -1,13 +1,15 @@
-import * as pdfParseModule from 'pdf-parse';
-
-const pdfParse = ((pdfParseModule as unknown as { default?: unknown }).default ??
-  pdfParseModule) as (data: Buffer) => Promise<{ text: string }>;
+import { PDFParse } from 'pdf-parse';
 
 export const extractPdfText = async (fileBuffer: Buffer): Promise<string> => {
+    const parser = new PDFParse({ data: fileBuffer });
+
     try {
-        const data = await pdfParse(fileBuffer);
-        return data.text.trim();
-    } catch (error: any) {
-        throw new Error(`Failed to parse PDF: ${error.message}`);
+        const result = await parser.getText();
+        return result.text.trim();
+    } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        throw new Error(`Failed to parse PDF: ${message}`);
+    } finally {
+        await parser.destroy();
     }
 };

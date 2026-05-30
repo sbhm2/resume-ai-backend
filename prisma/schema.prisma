@@ -1,0 +1,50 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id             String           @id @default(uuid()) @db.Uuid
+  name           String
+  email          String           @unique
+  passwordHash   String           @map("password_hash")
+  isActive       Boolean          @default(true) @map("is_active")
+  createdAt      DateTime         @default(now()) @map("created_at")
+  updatedAt      DateTime         @updatedAt @map("updated_at")
+  analyses       ResumeAnalysis[]
+  usageTracking  UsageTracking[]
+
+  @@map("users")
+}
+
+model ResumeAnalysis {
+  id              String   @id @default(uuid()) @db.Uuid
+  userId          String   @map("user_id") @db.Uuid
+  jobDescription  String   @map("job_description")
+  resumeFileName  String   @map("resume_file_name")
+  atsScore        Int      @map("ats_score")
+  analysisJson    Json     @map("analysis_json")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("resume_analyses")
+}
+
+model UsageTracking {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @map("user_id") @db.Uuid
+  analysisCount Int      @default(0) @map("analysis_count")
+  date          DateTime @db.Date // Added date to track daily limits specifically
+  month         Int
+  year          Int
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date]) // Ensures one tracking record per user per day
+  @@map("usage_tracking")
+}
