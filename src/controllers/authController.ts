@@ -41,10 +41,11 @@ export const signup = async (req: Request, res: Response, next: NextFunction): P
 
         res.status(201).json({
             success: true,
-            token,
+            accessToken: token,
             user: { id: user.id, name: user.name, email: user.email }
         });
     } catch (error: any) {
+        console.log({error});
         if (error.name === 'ZodError') {
              res.status(400).json({ success: false, error: error.errors });
              return;
@@ -73,7 +74,7 @@ export const signin = async (req: Request, res: Response, next: NextFunction): P
 
         res.status(200).json({
             success: true,
-            token,
+            accessToken:token,
             user: { id: user.id, name: user.name, email: user.email }
         });
     } catch (error: any) {
