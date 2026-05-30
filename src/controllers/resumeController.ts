@@ -1,7 +1,9 @@
+import { randomUUID } from 'crypto';
 import { Request, Response, NextFunction } from 'express';
 import { extractPdfText } from '../utils/extractPdfText';
 import { extractDocxText } from '../utils/extractDocxText';
 import { analyzeResume } from '../services/aiService';
+import { AnalyzeResumeSuccessResponse } from '../types';
 
 export const processResume = async (
     req: Request, 
@@ -43,10 +45,14 @@ export const processResume = async (
 
         const aiAnalysis = await analyzeResume(resumeText, jobDescription);
 
-        res.status(200).json({
+        const response: AnalyzeResumeSuccessResponse = {
             success: true,
-            data: aiAnalysis
-        });
+            requestId: randomUUID(),
+            generatedAt: new Date().toISOString(),
+            data: aiAnalysis,
+        };
+
+        res.status(200).json(response);
 
     } catch (error) {
         next(error); // Pass to global error handler

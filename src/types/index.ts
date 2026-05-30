@@ -7,3 +7,10 @@ export interface AIAnalysisResult {
     interviewQuestions: string[];
     coverLetter: string;
 }
+
+export interface AnalyzeResumeSuccessResponse {
+    success: true;
+    requestId: string;
+    generatedAt: string;
+    data: AIAnalysisResult;
+}

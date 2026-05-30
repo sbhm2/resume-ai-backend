@@ -55,6 +55,8 @@ Example success response:
 ```json
 {
   "success": true,
+  "requestId": "550e8400-e29b-41d4-a716-446655440000",
+  "generatedAt": "2026-05-30T12:00:00.000Z",
   "data": {
     "atsScore": 85,
     "missingKeywords": ["TypeScript", "GraphQL", "AWS"],

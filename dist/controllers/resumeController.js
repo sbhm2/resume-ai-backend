@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.processResume = void 0;
+const crypto_1 = require("crypto");
 const extractPdfText_1 = require("../utils/extractPdfText");
 const extractDocxText_1 = require("../utils/extractDocxText");
 const aiService_1 = require("../services/aiService");
@@ -33,10 +34,13 @@ const processResume = async (req, res, next) => {
             return;
         }
         const aiAnalysis = await (0, aiService_1.analyzeResume)(resumeText, jobDescription);
-        res.status(200).json({
+        const response = {
             success: true,
-            data: aiAnalysis
-        });
+            requestId: (0, crypto_1.randomUUID)(),
+            generatedAt: new Date().toISOString(),
+            data: aiAnalysis,
+        };
+        res.status(200).json(response);
     }
     catch (error) {
         next(error); // Pass to global error handler
