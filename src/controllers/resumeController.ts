@@ -2,53 +2,59 @@ import { Request, Response, NextFunction } from 'express';
 import { extractPdfText } from '../utils/extractPdfText';
 import { extractDocxText } from '../utils/extractDocxText';
 import { analyzeResume } from '../services/aiService';
+import {prisma} from '../config/prisma';
+import type { Prisma } from '@prisma/client';
 
-export const processResume = async (
-    req: Request, 
-    res: Response, 
-    next: NextFunction
-): Promise<void> => {
+export const processResume = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
         const { jobDescription } = req.body;
         const file = req.file;
+        const userId = req.user!.id;
 
-        if (!file) {
-            res.status(400).json({ success: false, error: 'Resume file is required' });
+        if (!file || !jobDescription) {
+            res.status(400).json({ success: false, error: 'Resume file and job description are required' });
             return;
         }
 
-        if (!jobDescription || typeof jobDescription !== 'string' || jobDescription.trim() === '') {
-            res.status(400).json({ success: false, error: 'Job description is required' });
-            return;
-        }
+        let resumeText = '';
+        if (file.mimetype === 'application/pdf') resumeText = await extractPdfText(file.buffer);
+        else resumeText = await extractDocxText(file.buffer);
 
-        let resumeText: string = '';
-
-        if (file.mimetype === 'application/pdf') {
-            resumeText = await extractPdfText(file.buffer);
-        } else if (
-            file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || 
-            file.mimetype === 'application/msword'
-        ) {
-            resumeText = await extractDocxText(file.buffer);
-        } else {
-            res.status(400).json({ success: false, error: 'Unsupported file type' });
-            return;
-        }
-
-        if (!resumeText || resumeText.length < 50) {
-            res.status(400).json({ success: false, error: 'Could not extract sufficient text from the file' });
-            return;
-        }
-
+        // Call Gemini
         const aiAnalysis = await analyzeResume(resumeText, jobDescription);
+
+        // Save Analysis to Database
+        const savedAnalysis = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+            // 1. Save the analysis
+            const analysis = await tx.resumeAnalysis.create({
+                data: {
+                    userId,
+                    jobDescription,
+                    resumeFileName: file.originalname,
+                    atsScore: aiAnalysis.atsScore,
+                    analysisJson: aiAnalysis as any
+                }
+            });
+
+            // 2. Increment usage tracking
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            
+            await tx.usageTracking.update({
+                where: { userId_date: { userId, date: today } },
+                data: { analysisCount: { increment: 1 } }
+            });
+
+            return analysis;
+        });
 
         res.status(200).json({
             success: true,
-            data: aiAnalysis
+            data: savedAnalysis.analysisJson,
+            analysisId: savedAnalysis.id
         });
 
     } catch (error) {
-        next(error); // Pass to global error handler
+        next(error);
     }
 };

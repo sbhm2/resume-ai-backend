@@ -6,7 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const dotenv_1 = __importDefault(require("dotenv"));
 dotenv_1.default.config();
 const App_1 = __importDefault(require("./App"));
-const DEFAULT_PORT = 5000;
+const DEFAULT_PORT = 3000;
 const START_PORT = Number.parseInt(process.env.PORT, 10) || DEFAULT_PORT;
 const startServer = (port) => {
     // Keep a strong reference to the server so it isn't GC'd,
