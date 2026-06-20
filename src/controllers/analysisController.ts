@@ -1,5 +1,14 @@
 import { Request, Response, NextFunction } from 'express';
 import { prisma } from '../config/prisma';
+import { AIAnalysisResult } from '../types';
+
+function getTodayRange() {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const end = new Date();
+  end.setHours(23, 59, 59, 999);
+  return { start, end };
+}
 
 export const getHistory = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
@@ -58,6 +67,212 @@ export const deleteAnalysis = async (req: Request, res: Response, next: NextFunc
         await prisma.resumeAnalysis.delete({ where: { id: req.params.id } });
 
         res.status(200).json({ success: true, message: 'Analysis deleted successfully' });
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const getDashboard = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+        const userId = req.user!.id;
+        const { start: todayStart, end: todayEnd } = getTodayRange();
+
+        // Total analyses count
+        const totalAnalyses = await prisma.resumeAnalysis.count({
+            where: { userId }
+        });
+
+        // Today's analyses count
+        const todayAnalyses = await prisma.resumeAnalysis.count({
+            where: {
+                userId,
+                createdAt: { gte: todayStart, lte: todayEnd }
+            }
+        });
+
+        // Average ATS score
+        const avgResult = await prisma.resumeAnalysis.aggregate({
+            where: { userId },
+            _avg: { atsScore: true }
+        });
+        const averageAtsScore = Math.round(avgResult._avg.atsScore || 0);
+
+        // Daily usage tracking
+        const todayUsage = await prisma.usageTracking.findUnique({
+            where: { userId_date: { userId, date: todayStart } }
+        });
+        const dailyUsageCount = todayUsage?.analysisCount || 0;
+
+        // Recent 5 analyses
+        const recentAnalyses = await prisma.resumeAnalysis.findMany({
+            where: { userId },
+            orderBy: { createdAt: 'desc' },
+            take: 5,
+            select: {
+                id: true,
+                resumeFileName: true,
+                atsScore: true,
+                jobDescription: true,
+                createdAt: true
+            }
+        });
+
+        res.status(200).json({
+            success: true,
+            data: {
+                totalAnalyses,
+                todayAnalyses,
+                dailyUsageCount,
+                dailyLimit: 5,
+                averageAtsScore,
+                recentAnalyses
+            }
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const getEditorData = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+        const analysis = await prisma.resumeAnalysis.findUnique({
+            where: { id: req.params.id }
+        });
+
+        if (!analysis || analysis.userId !== req.user!.id) {
+            res.status(404).json({ success: false, error: 'Analysis not found or unauthorized' });
+            return;
+        }
+
+        const analysisJson = analysis.analysisJson as unknown as AIAnalysisResult;
+        
+        if (!analysisJson.parsedResume) {
+            res.status(404).json({ success: false, error: 'Parsed resume data not found in this analysis. Please re-run the analysis.' });
+            return;
+        }
+
+        // Convert analysis data to the editor format expected by the frontend
+        const resumeData = {
+            name: analysisJson.parsedResume.name,
+            contact: analysisJson.parsedResume.contact,
+            summary: analysisJson.parsedResume.summary,
+            experience: analysisJson.parsedResume.experience.map((exp, idx) => ({
+                id: `exp${idx + 1}`,
+                company: exp.company,
+                role: exp.role,
+                date: exp.date,
+                bullets: exp.bullets
+            })),
+            skills: analysisJson.parsedResume.skills,
+            education: analysisJson.parsedResume.education
+        };
+
+        // Construct suggestions from the analysis data
+        const suggestions: {
+            id: string;
+            type: 'bullet' | 'skill' | 'keyword' | 'summary';
+            sectionId?: string;
+            itemIndex?: number;
+            original: string;
+            suggested: string;
+            status: 'pending';
+            title: string;
+            sectionLabel: string;
+        }[] = [];
+
+        let sId = 1;
+
+        // Resume suggestions as summary improvements (take at most 1)
+        const bestSummarySuggestion = analysisJson.resumeSuggestions[0];
+        if (bestSummarySuggestion) {
+            suggestions.push({
+                id: `s${sId++}`,
+                type: 'summary',
+                original: resumeData.summary,
+                suggested: bestSummarySuggestion,
+                status: 'pending',
+                title: 'Professional Summary Enhancement',
+                sectionLabel: 'Professional Summary'
+            });
+        }
+
+        // Improved bullet points — map 1:1 to the flattened list of all original bullets
+        // Collect all original bullets with their (expId, bulletIndex) positions, flattened
+        const originalBulletMap: { sectionId: string; itemIndex: number; text: string; sectionLabel: string }[] = [];
+        for (const exp of resumeData.experience) {
+            exp.bullets.forEach((bulletText, bIdx) => {
+                originalBulletMap.push({
+                    sectionId: exp.id,
+                    itemIndex: bIdx,
+                    text: bulletText,
+                    sectionLabel: `${exp.role ? exp.role + ' — ' : ''}${exp.company || 'Experience'}`
+                });
+            });
+        }
+
+        analysisJson.improvedBulletPoints.forEach((bullet: string, idx: number) => {
+            const originalEntry = originalBulletMap[idx];
+            if (originalEntry) {
+                suggestions.push({
+                    id: `s${sId++}`,
+                    type: 'bullet',
+                    sectionId: originalEntry.sectionId,
+                    itemIndex: originalEntry.itemIndex,
+                    original: originalEntry.text,
+                    suggested: bullet,
+                    status: 'pending',
+                    title: 'Impact Optimization',
+                    sectionLabel: originalEntry.sectionLabel
+                });
+            }
+        });
+
+        // Missing keywords — only add ones not already in the skills list
+        const existingSkills = new Set(resumeData.skills.map(s => s.toLowerCase()));
+        analysisJson.missingKeywords.forEach((kw: string) => {
+            if (existingSkills.has(kw.toLowerCase())) return;
+            suggestions.push({
+                id: `s${sId++}`,
+                type: 'skill',
+                original: '',
+                suggested: kw,
+                status: 'pending',
+                title: 'Add Missing ATS Keyword',
+                sectionLabel: 'Skills & Technologies'
+            });
+        });
+
+        // Recommended skills that aren't already in the list and aren't suggested as missingKeywords
+        const missingKeywordSet = new Set(analysisJson.missingKeywords.map(k => k.toLowerCase()));
+        analysisJson.recommendedSkills.forEach((skill: string) => {
+            if (existingSkills.has(skill.toLowerCase()) || missingKeywordSet.has(skill.toLowerCase())) return;
+            suggestions.push({
+                id: `s${sId++}`,
+                type: 'skill',
+                original: '',
+                suggested: skill,
+                status: 'pending',
+                title: 'Recommended Skill',
+                sectionLabel: 'Skills & Technologies'
+            });
+        });
+
+        res.status(200).json({
+            success: true,
+            data: {
+                resume: resumeData,
+                suggestions,
+                analysisData: {
+                    atsScore: analysisJson.atsScore,
+                    missingKeywords: analysisJson.missingKeywords,
+                    resumeSuggestions: analysisJson.resumeSuggestions,
+                    improvedBulletPoints: analysisJson.improvedBulletPoints,
+                    recommendedSkills: analysisJson.recommendedSkills,
+                    interviewQuestions: analysisJson.interviewQuestions,
+                    coverLetter: analysisJson.coverLetter
+                }
+            }
+        });
     } catch (error) {
         next(error);
     }

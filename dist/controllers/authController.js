@@ -37,11 +37,12 @@ const signup = async (req, res, next) => {
         const token = generateToken(user.id, user.email);
         res.status(201).json({
             success: true,
-            token,
+            accessToken: token,
             user: { id: user.id, name: user.name, email: user.email }
         });
     }
     catch (error) {
+        console.log({ error });
         if (error.name === 'ZodError') {
             res.status(400).json({ success: false, error: error.errors });
             return;
@@ -66,7 +67,7 @@ const signin = async (req, res, next) => {
         const token = generateToken(user.id, user.email);
         res.status(200).json({
             success: true,
-            token,
+            accessToken: token,
             user: { id: user.id, name: user.name, email: user.email }
         });
     }
