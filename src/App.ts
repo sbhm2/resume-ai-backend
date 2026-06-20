@@ -11,7 +11,30 @@ const app: Application = express();
 
 // Security Middleware
 app.use(helmet()); // Adds security headers (prevents XSS, clickjacking, etc.)
-app.use(cors());
+
+// CORS — explicit allow for Vercel frontend + local dev
+const allowedOrigins = [
+  'http://localhost:5173',
+  'http://localhost:4173',
+  'https://resume-ai-git-feature-5d44e6-singhshubhamkumar80-5095s-projects.vercel.app',
+];
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (server-to-server, curl, etc.)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    // Allow any Vercel preview/branch deployment
+    if (origin.endsWith('.vercel.app')) return callback(null, true);
+    callback(new Error('Not allowed by CORS'));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
+
+// Handle preflight explicitly
+app.options('*', (_, res) => res.sendStatus(204));
+
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
