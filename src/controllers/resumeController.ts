@@ -3,6 +3,7 @@ import { extractPdfText } from '../utils/extractPdfText';
 import { extractDocxText } from '../utils/extractDocxText';
 import { analyzeResume } from '../services/aiService';
 import {prisma} from '../config/prisma';
+import type { Prisma } from '@prisma/client';
 
 export const processResume = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
@@ -23,7 +24,7 @@ export const processResume = async (req: Request, res: Response, next: NextFunct
         const aiAnalysis = await analyzeResume(resumeText, jobDescription);
 
         // Save Analysis to Database
-        const savedAnalysis = await prisma.$transaction(async (tx) => {
+        const savedAnalysis = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
             // 1. Save the analysis
             const analysis = await tx.resumeAnalysis.create({
                 data: {
