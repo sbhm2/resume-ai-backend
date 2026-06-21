@@ -218,6 +218,67 @@ export const saveDraft = async (req: Request, res: Response, next: NextFunction)
     }
 };
 
+export const getCoverLetters = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+        const analyses = await prisma.resumeAnalysis.findMany({
+            where: { userId: req.user!.id },
+            orderBy: { createdAt: 'desc' },
+            select: { id: true, jobDescription: true, resumeFileName: true, createdAt: true, analysisJson: true }
+        });
+
+        const coverLetters = analyses
+            .map((a) => {
+                const json = a.analysisJson as Record<string, unknown>;
+                const aiData = json as unknown as AIAnalysisResult;
+                const draftCoverLetter = (json.draftData as Record<string, unknown> | undefined)?.coverLetter;
+                const coverLetter = (draftCoverLetter as string) || aiData.coverLetter;
+                if (!coverLetter) return null;
+                return {
+                    id: a.id,
+                    jobDescription: a.jobDescription,
+                    resumeFileName: a.resumeFileName,
+                    createdAt: a.createdAt,
+                    coverLetter
+                };
+            })
+            .filter(Boolean);
+
+        res.status(200).json({ success: true, data: coverLetters });
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const updateCoverLetter = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+        const { coverLetter } = req.body;
+        if (typeof coverLetter !== 'string') {
+            res.status(400).json({ success: false, error: 'coverLetter string is required' });
+            return;
+        }
+
+        const analysis = await prisma.resumeAnalysis.findUnique({ where: { id: req.params.id } });
+        if (!analysis || analysis.userId !== req.user!.id) {
+            res.status(404).json({ success: false, error: 'Analysis not found or unauthorized' });
+            return;
+        }
+
+        const analysisJson = analysis.analysisJson as Record<string, unknown>;
+        const existingDraft = (analysisJson.draftData as Record<string, unknown>) || {};
+        const updatedDraft = { ...existingDraft, coverLetter };
+        const updatedJson = { ...analysisJson, draftData: updatedDraft };
+
+        await prisma.resumeAnalysis.update({
+            where: { id: req.params.id },
+            data: { analysisJson: updatedJson as any }
+        });
+
+        res.status(200).json({ success: true, message: 'Cover letter saved successfully' });
+    } catch (error) {
+        next(error);
+    }
+};
+
 export const getEditorData = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
         const analysis = await prisma.resumeAnalysis.findUnique({
