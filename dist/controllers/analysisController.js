@@ -1,7 +1,8 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getEditorData = exports.getDashboard = exports.deleteAnalysis = exports.getAnalysisById = exports.getHistory = void 0;
+exports.getEditorData = exports.saveDraft = exports.getDashboard = exports.deleteAnalysis = exports.getAnalysisById = exports.getHistory = void 0;
 const prisma_1 = require("../config/prisma");
+const diff_1 = require("../utils/diff");
 function getTodayRange() {
     const start = new Date();
     start.setHours(0, 0, 0, 0);
@@ -122,6 +123,75 @@ const getDashboard = async (req, res, next) => {
     }
 };
 exports.getDashboard = getDashboard;
+const saveDraft = async (req, res, next) => {
+    try {
+        const { mode } = req.body;
+        const analysis = await prisma_1.prisma.resumeAnalysis.findUnique({
+            where: { id: req.params.id }
+        });
+        if (!analysis || analysis.userId !== req.user.id) {
+            res.status(404).json({ success: false, error: 'Analysis not found or unauthorized' });
+            return;
+        }
+        const analysisJson = analysis.analysisJson;
+        let newDraftData;
+        if (mode === 'full') {
+            // Full payload — first save or fallback
+            const { workingResume } = req.body;
+            if (!workingResume) {
+                res.status(400).json({ success: false, error: 'workingResume is required for full mode' });
+                return;
+            }
+            newDraftData = workingResume;
+        }
+        else if (mode === 'patch') {
+            // Incremental diff — only changed fields
+            const { baseHash, ops } = req.body;
+            if (!ops || !Array.isArray(ops)) {
+                res.status(400).json({ success: false, error: 'ops array is required for patch mode' });
+                return;
+            }
+            const existingDraft = analysisJson.draftData;
+            // Validate base hash matches what server has stored
+            if (existingDraft && baseHash) {
+                const serverHash = (0, diff_1.computeHash)(existingDraft);
+                if (serverHash !== baseHash) {
+                    res.status(409).json({
+                        success: false,
+                        error: 'Stale draft — base hash mismatch. Sending full state required.',
+                        serverHash,
+                    });
+                    return;
+                }
+            }
+            // Apply patch to reconstruct full state
+            if (!existingDraft) {
+                // No previous draft — can't patch, need full
+                res.status(400).json({
+                    success: false,
+                    error: 'No existing draft found. Send full payload instead.',
+                });
+                return;
+            }
+            newDraftData = (0, diff_1.applyPatch)(existingDraft, ops);
+        }
+        else {
+            res.status(400).json({ success: false, error: 'mode must be "full" or "patch"' });
+            return;
+        }
+        // Merge draft data into the existing analysisJson
+        const updatedJson = { ...analysisJson, draftData: newDraftData };
+        await prisma_1.prisma.resumeAnalysis.update({
+            where: { id: req.params.id },
+            data: { analysisJson: updatedJson }
+        });
+        res.status(200).json({ success: true, message: 'Draft saved successfully' });
+    }
+    catch (error) {
+        next(error);
+    }
+};
+exports.saveDraft = saveDraft;
 const getEditorData = async (req, res, next) => {
     try {
         const analysis = await prisma_1.prisma.resumeAnalysis.findUnique({
@@ -132,30 +202,46 @@ const getEditorData = async (req, res, next) => {
             return;
         }
         const analysisJson = analysis.analysisJson;
-        if (!analysisJson.parsedResume) {
+        // Check for saved draft data first (from previous edits)
+        const existingDraft = analysisJson.draftData;
+        const aiData = analysisJson;
+        if (!aiData.parsedResume) {
             res.status(404).json({ success: false, error: 'Parsed resume data not found in this analysis. Please re-run the analysis.' });
             return;
         }
-        // Convert analysis data to the editor format expected by the frontend
-        const resumeData = {
-            name: analysisJson.parsedResume.name,
-            contact: analysisJson.parsedResume.contact,
-            summary: analysisJson.parsedResume.summary,
-            experience: analysisJson.parsedResume.experience.map((exp, idx) => ({
+        // Use saved draft if available, otherwise reconstruct from analysis
+        const resumeData = existingDraft ? {
+            name: existingDraft.name,
+            contact: existingDraft.contact,
+            summary: existingDraft.summary,
+            experience: existingDraft.experience.map((exp, idx) => ({
+                id: exp.id || `exp${idx + 1}`,
+                company: exp.company,
+                role: exp.role,
+                date: exp.date,
+                bullets: exp.bullets
+            })),
+            skills: existingDraft.skills,
+            education: existingDraft.education
+        } : {
+            name: aiData.parsedResume.name,
+            contact: aiData.parsedResume.contact,
+            summary: aiData.parsedResume.summary,
+            experience: aiData.parsedResume.experience.map((exp, idx) => ({
                 id: `exp${idx + 1}`,
                 company: exp.company,
                 role: exp.role,
                 date: exp.date,
                 bullets: exp.bullets
             })),
-            skills: analysisJson.parsedResume.skills,
-            education: analysisJson.parsedResume.education
+            skills: aiData.parsedResume.skills,
+            education: aiData.parsedResume.education
         };
         // Construct suggestions from the analysis data
         const suggestions = [];
         let sId = 1;
         // Resume suggestions as summary improvements (take at most 1)
-        const bestSummarySuggestion = analysisJson.resumeSuggestions[0];
+        const bestSummarySuggestion = aiData.resumeSuggestions[0];
         if (bestSummarySuggestion) {
             suggestions.push({
                 id: `s${sId++}`,
@@ -180,7 +266,7 @@ const getEditorData = async (req, res, next) => {
                 });
             });
         }
-        analysisJson.improvedBulletPoints.forEach((bullet, idx) => {
+        aiData.improvedBulletPoints.forEach((bullet, idx) => {
             const originalEntry = originalBulletMap[idx];
             if (originalEntry) {
                 suggestions.push({
@@ -198,7 +284,7 @@ const getEditorData = async (req, res, next) => {
         });
         // Missing keywords — only add ones not already in the skills list
         const existingSkills = new Set(resumeData.skills.map(s => s.toLowerCase()));
-        analysisJson.missingKeywords.forEach((kw) => {
+        aiData.missingKeywords.forEach((kw) => {
             if (existingSkills.has(kw.toLowerCase()))
                 return;
             suggestions.push({
@@ -212,8 +298,8 @@ const getEditorData = async (req, res, next) => {
             });
         });
         // Recommended skills that aren't already in the list and aren't suggested as missingKeywords
-        const missingKeywordSet = new Set(analysisJson.missingKeywords.map(k => k.toLowerCase()));
-        analysisJson.recommendedSkills.forEach((skill) => {
+        const missingKeywordSet = new Set(aiData.missingKeywords.map(k => k.toLowerCase()));
+        aiData.recommendedSkills.forEach((skill) => {
             if (existingSkills.has(skill.toLowerCase()) || missingKeywordSet.has(skill.toLowerCase()))
                 return;
             suggestions.push({
@@ -232,13 +318,13 @@ const getEditorData = async (req, res, next) => {
                 resume: resumeData,
                 suggestions,
                 analysisData: {
-                    atsScore: analysisJson.atsScore,
-                    missingKeywords: analysisJson.missingKeywords,
-                    resumeSuggestions: analysisJson.resumeSuggestions,
-                    improvedBulletPoints: analysisJson.improvedBulletPoints,
-                    recommendedSkills: analysisJson.recommendedSkills,
-                    interviewQuestions: analysisJson.interviewQuestions,
-                    coverLetter: analysisJson.coverLetter
+                    atsScore: aiData.atsScore,
+                    missingKeywords: aiData.missingKeywords,
+                    resumeSuggestions: aiData.resumeSuggestions,
+                    improvedBulletPoints: aiData.improvedBulletPoints,
+                    recommendedSkills: aiData.recommendedSkills,
+                    interviewQuestions: aiData.interviewQuestions,
+                    coverLetter: aiData.coverLetter
                 }
             }
         });

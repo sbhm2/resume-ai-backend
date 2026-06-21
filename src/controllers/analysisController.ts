@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { prisma } from '../config/prisma';
 import { AIAnalysisResult } from '../types';
+import { computeHash, applyPatch } from '../utils/diff';
 
 function getTodayRange() {
   const start = new Date();
@@ -133,6 +134,84 @@ export const getDashboard = async (req: Request, res: Response, next: NextFuncti
     }
 };
 
+export const saveDraft = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+        const { mode } = req.body;
+
+        const analysis = await prisma.resumeAnalysis.findUnique({
+            where: { id: req.params.id }
+        });
+
+        if (!analysis || analysis.userId !== req.user!.id) {
+            res.status(404).json({ success: false, error: 'Analysis not found or unauthorized' });
+            return;
+        }
+
+        const analysisJson = analysis.analysisJson as Record<string, unknown>;
+        let newDraftData: unknown;
+
+        if (mode === 'full') {
+            // Full payload — first save or fallback
+            const { workingResume } = req.body;
+            if (!workingResume) {
+                res.status(400).json({ success: false, error: 'workingResume is required for full mode' });
+                return;
+            }
+            newDraftData = workingResume;
+        } else if (mode === 'patch') {
+            // Incremental diff — only changed fields
+            const { baseHash, ops } = req.body;
+
+            if (!ops || !Array.isArray(ops)) {
+                res.status(400).json({ success: false, error: 'ops array is required for patch mode' });
+                return;
+            }
+
+            const existingDraft = (analysisJson as Record<string, unknown>).draftData;
+
+            // Validate base hash matches what server has stored
+            if (existingDraft && baseHash) {
+                const serverHash = computeHash(existingDraft);
+                if (serverHash !== baseHash) {
+                    res.status(409).json({
+                        success: false,
+                        error: 'Stale draft — base hash mismatch. Sending full state required.',
+                        serverHash,
+                    });
+                    return;
+                }
+            }
+
+            // Apply patch to reconstruct full state
+            if (!existingDraft) {
+                // No previous draft — can't patch, need full
+                res.status(400).json({
+                    success: false,
+                    error: 'No existing draft found. Send full payload instead.',
+                });
+                return;
+            }
+
+            newDraftData = applyPatch(existingDraft, ops);
+        } else {
+            res.status(400).json({ success: false, error: 'mode must be "full" or "patch"' });
+            return;
+        }
+
+        // Merge draft data into the existing analysisJson
+        const updatedJson = { ...analysisJson, draftData: newDraftData } as Record<string, unknown>;
+
+        await prisma.resumeAnalysis.update({
+            where: { id: req.params.id },
+            data: { analysisJson: updatedJson as any }
+        });
+
+        res.status(200).json({ success: true, message: 'Draft saved successfully' });
+    } catch (error) {
+        next(error);
+    }
+};
+
 export const getEditorData = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
         const analysis = await prisma.resumeAnalysis.findUnique({
@@ -144,27 +223,45 @@ export const getEditorData = async (req: Request, res: Response, next: NextFunct
             return;
         }
 
-        const analysisJson = analysis.analysisJson as unknown as AIAnalysisResult;
+        const analysisJson = analysis.analysisJson as Record<string, unknown>;
         
-        if (!analysisJson.parsedResume) {
+        // Check for saved draft data first (from previous edits)
+        const existingDraft = analysisJson.draftData as Record<string, unknown> | undefined;
+        
+        const aiData = analysisJson as unknown as AIAnalysisResult;
+        
+        if (!aiData.parsedResume) {
             res.status(404).json({ success: false, error: 'Parsed resume data not found in this analysis. Please re-run the analysis.' });
             return;
         }
 
-        // Convert analysis data to the editor format expected by the frontend
-        const resumeData = {
-            name: analysisJson.parsedResume.name,
-            contact: analysisJson.parsedResume.contact,
-            summary: analysisJson.parsedResume.summary,
-            experience: analysisJson.parsedResume.experience.map((exp, idx) => ({
+        // Use saved draft if available, otherwise reconstruct from analysis
+        const resumeData = existingDraft ? {
+            name: existingDraft.name as string,
+            contact: existingDraft.contact as string,
+            summary: existingDraft.summary as string,
+            experience: (existingDraft.experience as Array<Record<string, unknown>>).map((exp, idx) => ({
+                id: (exp.id as string) || `exp${idx + 1}`,
+                company: exp.company as string,
+                role: exp.role as string,
+                date: exp.date as string,
+                bullets: exp.bullets as string[]
+            })),
+            skills: existingDraft.skills as string[],
+            education: existingDraft.education as string
+        } : {
+            name: aiData.parsedResume.name,
+            contact: aiData.parsedResume.contact,
+            summary: aiData.parsedResume.summary,
+            experience: aiData.parsedResume.experience.map((exp, idx) => ({
                 id: `exp${idx + 1}`,
                 company: exp.company,
                 role: exp.role,
                 date: exp.date,
                 bullets: exp.bullets
             })),
-            skills: analysisJson.parsedResume.skills,
-            education: analysisJson.parsedResume.education
+            skills: aiData.parsedResume.skills,
+            education: aiData.parsedResume.education
         };
 
         // Construct suggestions from the analysis data
@@ -183,7 +280,7 @@ export const getEditorData = async (req: Request, res: Response, next: NextFunct
         let sId = 1;
 
         // Resume suggestions as summary improvements (take at most 1)
-        const bestSummarySuggestion = analysisJson.resumeSuggestions[0];
+        const bestSummarySuggestion = aiData.resumeSuggestions[0];
         if (bestSummarySuggestion) {
             suggestions.push({
                 id: `s${sId++}`,
@@ -210,7 +307,7 @@ export const getEditorData = async (req: Request, res: Response, next: NextFunct
             });
         }
 
-        analysisJson.improvedBulletPoints.forEach((bullet: string, idx: number) => {
+        aiData.improvedBulletPoints.forEach((bullet: string, idx: number) => {
             const originalEntry = originalBulletMap[idx];
             if (originalEntry) {
                 suggestions.push({
@@ -229,7 +326,7 @@ export const getEditorData = async (req: Request, res: Response, next: NextFunct
 
         // Missing keywords — only add ones not already in the skills list
         const existingSkills = new Set(resumeData.skills.map(s => s.toLowerCase()));
-        analysisJson.missingKeywords.forEach((kw: string) => {
+        aiData.missingKeywords.forEach((kw: string) => {
             if (existingSkills.has(kw.toLowerCase())) return;
             suggestions.push({
                 id: `s${sId++}`,
@@ -243,8 +340,8 @@ export const getEditorData = async (req: Request, res: Response, next: NextFunct
         });
 
         // Recommended skills that aren't already in the list and aren't suggested as missingKeywords
-        const missingKeywordSet = new Set(analysisJson.missingKeywords.map(k => k.toLowerCase()));
-        analysisJson.recommendedSkills.forEach((skill: string) => {
+        const missingKeywordSet = new Set(aiData.missingKeywords.map(k => k.toLowerCase()));
+        aiData.recommendedSkills.forEach((skill: string) => {
             if (existingSkills.has(skill.toLowerCase()) || missingKeywordSet.has(skill.toLowerCase())) return;
             suggestions.push({
                 id: `s${sId++}`,
@@ -263,13 +360,13 @@ export const getEditorData = async (req: Request, res: Response, next: NextFunct
                 resume: resumeData,
                 suggestions,
                 analysisData: {
-                    atsScore: analysisJson.atsScore,
-                    missingKeywords: analysisJson.missingKeywords,
-                    resumeSuggestions: analysisJson.resumeSuggestions,
-                    improvedBulletPoints: analysisJson.improvedBulletPoints,
-                    recommendedSkills: analysisJson.recommendedSkills,
-                    interviewQuestions: analysisJson.interviewQuestions,
-                    coverLetter: analysisJson.coverLetter
+                    atsScore: aiData.atsScore,
+                    missingKeywords: aiData.missingKeywords,
+                    resumeSuggestions: aiData.resumeSuggestions,
+                    improvedBulletPoints: aiData.improvedBulletPoints,
+                    recommendedSkills: aiData.recommendedSkills,
+                    interviewQuestions: aiData.interviewQuestions,
+                    coverLetter: aiData.coverLetter
                 }
             }
         });
