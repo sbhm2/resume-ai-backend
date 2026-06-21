@@ -7,6 +7,6 @@ import { checkUsageLimit } from '../middleware/usageLimitMiddleware';
 const router = Router();
 
 // Protect, check limit, parse file, process
-router.post('/analyze', authenticate, uploadMiddleware.single('resume'), processResume);
+router.post('/analyze', authenticate, checkUsageLimit, uploadMiddleware.single('resume'), processResume);
 
 export default router;

@@ -6,6 +6,7 @@ import rateLimit from 'express-rate-limit';
 import authRoutes from './routes/authRoutes';
 import resumeRoutes from './routes/resumeRoutes';
 import analysisRoutes from './routes/analysisRoutes';
+import statusRoutes from './routes/statusRoutes';
 
 const app: Application = express();
 
@@ -50,6 +51,7 @@ app.use('/api', limiter);
 app.use('/api/auth', authRoutes);
 app.use('/api/resume', resumeRoutes);
 app.use('/api/analysis', analysisRoutes);
+app.use('/', statusRoutes);
 
 // Global Error Handler
 app.use((err: any, req: Request, res: Response, next: NextFunction) => {
