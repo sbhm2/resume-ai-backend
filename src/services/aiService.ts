@@ -1,4 +1,4 @@
-import geminiModel from '../config/gemini';
+import { getModel } from '../config/gemini';
 import { AIAnalysisResult } from '../types';
 
 export const analyzeResume = async (
@@ -56,7 +56,8 @@ export const analyzeResume = async (
     `;
 
     try {
-        const result = await geminiModel.generateContent(prompt);
+        const model = getModel();
+        const result = await model.generateContent(prompt);
         const responseText = result.response.text();
         
         const parsedData: AIAnalysisResult = JSON.parse(responseText);
