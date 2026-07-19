@@ -1,5 +1,4 @@
 import { Request, Response, NextFunction } from 'express';
-import { extractPdfText } from '../utils/extractPdfText';
 import { extractDocxText } from '../utils/extractDocxText';
 import { analyzeResume } from '../services/aiService';
 import {prisma} from '../config/prisma';
@@ -16,9 +15,7 @@ export const processResume = async (req: Request, res: Response, next: NextFunct
             return;
         }
 
-        let resumeText = '';
-        if (file.mimetype === 'application/pdf') resumeText = await extractPdfText(file.buffer);
-        else resumeText = await extractDocxText(file.buffer);
+        const resumeText = await extractDocxText(file.buffer);
 
         // Call Gemini
         const aiAnalysis = await analyzeResume(resumeText, jobDescription);

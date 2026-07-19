@@ -9,7 +9,6 @@ const fileFilter = (
     cb: FileFilterCallback
 ): void => {
     const allowedMimeTypes = [
-        'application/pdf',
         'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // docx
         'application/msword' // doc
     ];
@@ -17,7 +16,7 @@ const fileFilter = (
     if (allowedMimeTypes.includes(file.mimetype)) {
         cb(null, true);
     } else {
-        cb(new Error('Invalid file type. Only PDF and DOCX files are allowed.'));
+        cb(new Error('Invalid file type. Only DOCX files are allowed.'));
     }
 };
 
