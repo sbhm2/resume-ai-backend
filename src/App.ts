@@ -13,12 +13,18 @@ const app: Application = express();
 // Security Middleware
 app.use(helmet()); // Adds security headers (prevents XSS, clickjacking, etc.)
 
-// CORS — explicit allow for Vercel frontend + local dev
-const allowedOrigins = [
+// CORS origins — read from env as comma-separated list, fall back to defaults
+const DEFAULT_ORIGINS = [
   'http://localhost:5173',
   'http://localhost:4173',
-  'https://resume-ai-git-feature-5d44e6-singhshubhamkumar80-5095s-projects.vercel.app',
+  'https://nextoffer.co.in',
+  'https://www.nextoffer.co.in',
+  'https://resume-ai-delta-six.vercel.app',
 ];
+const allowedOrigins: string[] = process.env.CORS_ORIGINS
+  ? process.env.CORS_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean)
+  : DEFAULT_ORIGINS;
+
 app.use(cors({
   origin: (origin, callback) => {
     // Allow requests with no origin (server-to-server, curl, etc.)
