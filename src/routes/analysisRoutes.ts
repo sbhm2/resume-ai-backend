@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getHistory, getAnalysisById, deleteAnalysis, getEditorData, saveDraft, getDashboard } from '../controllers/analysisController';
+import { getHistory, getAnalysisById, deleteAnalysis, getEditorData, saveDraft, getDashboard, getCoverLetters, updateCoverLetter } from '../controllers/analysisController';
 import { authenticate } from '../middleware/authMiddleware';
 
 const router = Router();
@@ -8,6 +8,8 @@ router.use(authenticate); // Protect all history routes
 
 router.get('/dashboard', getDashboard);
 router.get('/history', getHistory);
+router.get('/cover-letters', getCoverLetters);
+router.put('/cover-letter/:id', updateCoverLetter);
 router.get('/editor-data/:id', getEditorData);
 router.put('/editor-data/:id/draft', saveDraft);
 router.get('/:id', getAnalysisById);

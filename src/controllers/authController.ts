@@ -4,16 +4,15 @@ import jwt, { type SignOptions } from 'jsonwebtoken';
 import { prisma } from '../config/prisma';  
 import { signupSchema, signinSchema } from '../utils/validators';
 
-const JWT_SECRET = process.env.JWT_SECRET;
-if (!JWT_SECRET) {
-    throw new Error('JWT_SECRET is missing from environment variables');
-}
-
 const JWT_EXPIRES_IN = (process.env.JWT_EXPIRES_IN ?? '7d') as SignOptions['expiresIn'];
 
 const generateToken = (id: string, email: string): string => {
+    const secret = process.env.JWT_SECRET;
+    if (!secret) {
+        throw new Error('JWT_SECRET is missing from environment variables');
+    }
     const options: SignOptions = { expiresIn: JWT_EXPIRES_IN };
-    return jwt.sign({ id, email }, JWT_SECRET, options);
+    return jwt.sign({ id, email }, secret, options);
 };
 
 export const signup = async (req: Request, res: Response, next: NextFunction): Promise<void> => {

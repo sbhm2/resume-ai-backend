@@ -198,8 +198,14 @@ export const saveDraft = async (req: Request, res: Response, next: NextFunction)
             return;
         }
 
-        // Merge draft data into the existing analysisJson
-        const updatedJson = { ...analysisJson, draftData: newDraftData } as Record<string, unknown>;
+        // Persist suggestion statuses if provided
+        const { suggestionStatuses } = req.body;
+
+        // Merge draft data and suggestion statuses into the existing analysisJson
+        const updatedJson: Record<string, unknown> = { ...analysisJson, draftData: newDraftData };
+        if (suggestionStatuses && typeof suggestionStatuses === 'object') {
+            updatedJson.suggestionStatuses = suggestionStatuses;
+        }
 
         await prisma.resumeAnalysis.update({
             where: { id: req.params.id },
@@ -207,6 +213,67 @@ export const saveDraft = async (req: Request, res: Response, next: NextFunction)
         });
 
         res.status(200).json({ success: true, message: 'Draft saved successfully' });
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const getCoverLetters = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+        const analyses = await prisma.resumeAnalysis.findMany({
+            where: { userId: req.user!.id },
+            orderBy: { createdAt: 'desc' },
+            select: { id: true, jobDescription: true, resumeFileName: true, createdAt: true, analysisJson: true }
+        });
+
+        const coverLetters = analyses
+            .map((a) => {
+                const json = a.analysisJson as Record<string, unknown>;
+                const aiData = json as unknown as AIAnalysisResult;
+                const draftCoverLetter = (json.draftData as Record<string, unknown> | undefined)?.coverLetter;
+                const coverLetter = (draftCoverLetter as string) || aiData.coverLetter;
+                if (!coverLetter) return null;
+                return {
+                    id: a.id,
+                    jobDescription: a.jobDescription,
+                    resumeFileName: a.resumeFileName,
+                    createdAt: a.createdAt,
+                    coverLetter
+                };
+            })
+            .filter(Boolean);
+
+        res.status(200).json({ success: true, data: coverLetters });
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const updateCoverLetter = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+        const { coverLetter } = req.body;
+        if (typeof coverLetter !== 'string') {
+            res.status(400).json({ success: false, error: 'coverLetter string is required' });
+            return;
+        }
+
+        const analysis = await prisma.resumeAnalysis.findUnique({ where: { id: req.params.id } });
+        if (!analysis || analysis.userId !== req.user!.id) {
+            res.status(404).json({ success: false, error: 'Analysis not found or unauthorized' });
+            return;
+        }
+
+        const analysisJson = analysis.analysisJson as Record<string, unknown>;
+        const existingDraft = (analysisJson.draftData as Record<string, unknown>) || {};
+        const updatedDraft = { ...existingDraft, coverLetter };
+        const updatedJson = { ...analysisJson, draftData: updatedDraft };
+
+        await prisma.resumeAnalysis.update({
+            where: { id: req.params.id },
+            data: { analysisJson: updatedJson as any }
+        });
+
+        res.status(200).json({ success: true, message: 'Cover letter saved successfully' });
     } catch (error) {
         next(error);
     }
@@ -264,6 +331,9 @@ export const getEditorData = async (req: Request, res: Response, next: NextFunct
             education: aiData.parsedResume.education
         };
 
+        // Check for saved suggestion statuses
+        const savedStatuses = (analysisJson.suggestionStatuses as Record<string, string> | undefined) || {};
+
         // Construct suggestions from the analysis data
         const suggestions: {
             id: string;
@@ -272,7 +342,7 @@ export const getEditorData = async (req: Request, res: Response, next: NextFunct
             itemIndex?: number;
             original: string;
             suggested: string;
-            status: 'pending';
+            status: 'pending' | 'accepted' | 'rejected';
             title: string;
             sectionLabel: string;
         }[] = [];
@@ -282,12 +352,13 @@ export const getEditorData = async (req: Request, res: Response, next: NextFunct
         // Resume suggestions as summary improvements (take at most 1)
         const bestSummarySuggestion = aiData.resumeSuggestions[0];
         if (bestSummarySuggestion) {
+            const sId_str = `s${sId++}`;
             suggestions.push({
-                id: `s${sId++}`,
+                id: sId_str,
                 type: 'summary',
                 original: resumeData.summary,
                 suggested: bestSummarySuggestion,
-                status: 'pending',
+                status: (savedStatuses[sId_str] as 'pending' | 'accepted' | 'rejected') || 'pending',
                 title: 'Professional Summary Enhancement',
                 sectionLabel: 'Professional Summary'
             });
@@ -310,14 +381,15 @@ export const getEditorData = async (req: Request, res: Response, next: NextFunct
         aiData.improvedBulletPoints.forEach((bullet: string, idx: number) => {
             const originalEntry = originalBulletMap[idx];
             if (originalEntry) {
+                const sId_str = `s${sId++}`;
                 suggestions.push({
-                    id: `s${sId++}`,
+                    id: sId_str,
                     type: 'bullet',
                     sectionId: originalEntry.sectionId,
                     itemIndex: originalEntry.itemIndex,
                     original: originalEntry.text,
                     suggested: bullet,
-                    status: 'pending',
+                    status: (savedStatuses[sId_str] as 'pending' | 'accepted' | 'rejected') || 'pending',
                     title: 'Impact Optimization',
                     sectionLabel: originalEntry.sectionLabel
                 });
@@ -328,12 +400,13 @@ export const getEditorData = async (req: Request, res: Response, next: NextFunct
         const existingSkills = new Set(resumeData.skills.map(s => s.toLowerCase()));
         aiData.missingKeywords.forEach((kw: string) => {
             if (existingSkills.has(kw.toLowerCase())) return;
+            const sId_str = `s${sId++}`;
             suggestions.push({
-                id: `s${sId++}`,
+                id: sId_str,
                 type: 'skill',
                 original: '',
                 suggested: kw,
-                status: 'pending',
+                status: (savedStatuses[sId_str] as 'pending' | 'accepted' | 'rejected') || 'pending',
                 title: 'Add Missing ATS Keyword',
                 sectionLabel: 'Skills & Technologies'
             });
@@ -343,12 +416,13 @@ export const getEditorData = async (req: Request, res: Response, next: NextFunct
         const missingKeywordSet = new Set(aiData.missingKeywords.map(k => k.toLowerCase()));
         aiData.recommendedSkills.forEach((skill: string) => {
             if (existingSkills.has(skill.toLowerCase()) || missingKeywordSet.has(skill.toLowerCase())) return;
+            const sId_str = `s${sId++}`;
             suggestions.push({
-                id: `s${sId++}`,
+                id: sId_str,
                 type: 'skill',
                 original: '',
                 suggested: skill,
-                status: 'pending',
+                status: (savedStatuses[sId_str] as 'pending' | 'accepted' | 'rejected') || 'pending',
                 title: 'Recommended Skill',
                 sectionLabel: 'Skills & Technologies'
             });

@@ -1,5 +1,4 @@
 import { Request, Response, NextFunction } from 'express';
-import { extractPdfText } from '../utils/extractPdfText';
 import { extractDocxText } from '../utils/extractDocxText';
 import { analyzeResume } from '../services/aiService';
 import {prisma} from '../config/prisma';
@@ -11,17 +10,15 @@ export const processResume = async (req: Request, res: Response, next: NextFunct
         const file = req.file;
         const userId = req.user!.id;
 
-        if (!file || !jobDescription) {
-            res.status(400).json({ success: false, error: 'Resume file and job description are required' });
+        if (!file) {
+            res.status(400).json({ success: false, error: 'Resume file is required' });
             return;
         }
 
-        let resumeText = '';
-        if (file.mimetype === 'application/pdf') resumeText = await extractPdfText(file.buffer);
-        else resumeText = await extractDocxText(file.buffer);
+        const resumeText = await extractDocxText(file.buffer);
 
-        // Call Gemini
-        const aiAnalysis = await analyzeResume(resumeText, jobDescription);
+        // Call Gemini — jobDescription is optional; pass empty string if not provided
+        const aiAnalysis = await analyzeResume(resumeText, jobDescription || '');
 
         // Save Analysis to Database
         const savedAnalysis = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
